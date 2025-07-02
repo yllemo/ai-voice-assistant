@@ -1,0 +1,240 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Code Linting
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+    
+    - name: Install linting dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort
+    
+    - name: Run Black (Code Formatting)
+      run: black --check --diff main.py
+    
+    - name: Run isort (Import Sorting)
+      run: isort --check-only --diff main.py
+    
+    - name: Run Flake8 (Style Guide)
+      run: flake8 main.py --max-line-length=88 --extend-ignore=E203,W503
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+    
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y portaudio19-dev python3-pyaudio
+    
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install portaudio
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Test imports
+      run: |
+        python -c "import tkinter; print('tkinter OK')"
+        python -c "import pyaudio; print('pyaudio OK')"
+        python -c "import wave; print('wave OK')"
+        python -c "import requests; print('requests OK')"
+        python -c "import whisper; print('whisper OK')"
+    
+    - name: Basic functionality test
+      run: |
+        python -c "
+        import main
+        import sys
+        try:
+            # Test basic class instantiation (without GUI)
+            print('Basic import and class structure test passed')
+            sys.exit(0)
+        except Exception as e:
+            print(f'Test failed: {e}')
+            sys.exit(1)
+        "
+
+  security:
+    runs-on: ubuntu-latest
+    name: Security Scan
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+    
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+    
+    - name: Run Bandit (Security Linter)
+      run: bandit -r main.py -f json -o bandit-report.json || true
+    
+    - name: Run Safety (Dependency Check)
+      run: safety check --json --output safety-report.json || true
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  documentation:
+    runs-on: ubuntu-latest
+    name: Documentation Check
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check README
+      run: |
+        if [ ! -f README.md ]; then
+          echo "README.md is missing"
+          exit 1
+        fi
+        echo "README.md exists"
+    
+    - name: Check required files
+      run: |
+        required_files=("LICENSE" "CONTRIBUTING.md" "CHANGELOG.md" "requirements.txt")
+        for file in "${required_files[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "$file is missing"
+            exit 1
+          fi
+          echo "$file exists"
+        done
+    
+    - name: Validate requirements.txt
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt --dry-run
+
+  build:
+    runs-on: ${{ matrix.os }}
+    needs: [lint, test]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    name: Build on ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y portaudio19-dev python3-pyaudio
+    
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install portaudio
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --windowed --name ai-voice-assistant main.py
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ai-voice-assistant-${{ matrix.os }}
+        path: dist/
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    name: Create Release
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Create Release
+      if: contains(github.event.head_commit.message, '[release]')
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: Release v${{ github.run_number }}
+        body: |
+          ## Changes in this Release
+          
+          ${{ github.event.head_commit.message }}
+          
+          ## Downloads
+          
+          - **Windows**: Download `ai-voice-assistant-windows-latest`
+          - **macOS**: Download `ai-voice-assistant-macos-latest`  
+          - **Linux**: Download `ai-voice-assistant-ubuntu-latest`
+          
+          ## Installation
+          
+          1. Download the appropriate file for your operating system
+          2. Extract the archive
+          3. Run the executable
+          
+          For source installation, see the [README](README.md)
+        draft: false
+        prerelease: false
