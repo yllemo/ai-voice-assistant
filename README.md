@@ -1,3 +1,5 @@
+![AI Voice Assistant](AIVoiceAssistant.png)
+
 # 🎤 AI Voice Assistant
 
 A powerful desktop application that combines voice recording, AI transcription, and intelligent chat capabilities. Record your voice, transcribe it using OpenAI's Whisper, and engage in focused conversations about your transcribed content using LM Studio.
